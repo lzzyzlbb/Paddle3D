@@ -59,12 +59,10 @@ cd ../../../
 ```
 
 ## 使用说明
-```
-配置文件在`configs/caddn/`目录下
 
-数据在 data/kitti/training下有一部分，还需要将部分处理好的数据, 下载后放到data/kitti/下面
-```
-- [kitti_infos_val](https://paddle3d.bj.bcebos.com/caddn/data/kitti_infos_val.pkl),
+配置文件在`configs/caddn/`目录下
+数据在 data/kitti/training下有一部分，还需要将部分处理好的数据, [kitti_infos_val](https://paddle3d.bj.bcebos.com/caddn/data/kitti_infos_val.pkl), 下载后放到data/kitti/下面
+
 
 
 
