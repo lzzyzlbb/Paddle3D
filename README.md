@@ -63,7 +63,7 @@ cd ../../../
 配置文件在`configs/caddn/`目录下
 
 数据在 data/kitti/training下有一部分，还需要将部分处理好的数据 
-(https://paddle3d.bj.bcebos.com/caddn/data/kitti_infos_val.pkl),
+[kitti_infos_val](https://paddle3d.bj.bcebos.com/caddn/data/kitti_infos_val.pkl),
 下载后放到data/kitti/下面
 ```
 
@@ -74,7 +74,7 @@ cd ../../../
 ```
 export CUDA_VISIBLE_DEVICES=0
 python export.py --config configs/caddn/caddn.yml --model_path model_path
-model_path 在 (https://paddle3d.bj.bcebos.com/caddn/model/paddle_caddn.pdparams) 需要下载
+model_path 在 [paddle_caddn](https://paddle3d.bj.bcebos.com/caddn/model/paddle_caddn.pdparams) 需要下载
 ```
 
 ### 推理
