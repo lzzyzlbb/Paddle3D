@@ -1,0 +1,8 @@
+colorlog
+easydict
+numpy
+nuscenes-devkit
+opencv-python
+pandas
+pyquaternion
+pyyaml
