@@ -38,11 +38,11 @@ python -c "import paddle; print(paddle.__version__)"
 
 ```
 # 克隆仓库
-cd <path/to/clone/PaddleDetection3D>
+cd <path/to/clone/Paddle3D>
 git clone https://github.com/lzzyzlbb/Paddle3D
 
 # 安装其他依赖
-cd PaddleDetection3D
+cd Paddle3D
 pip install -r requirements.txt
 
 ```
@@ -53,6 +53,7 @@ pip install -r requirements.txt
 cd paddle3d/ops/iou3d_nms/
 python setup.py install
 cd paddle3d/ops/grid_sample_3d/
+python setup.py install
 cd ../../../
 
 ```
@@ -61,7 +62,9 @@ cd ../../../
 ```
 配置文件在`configs/caddn/`目录下
 
-数据在 data/下有一部分，还需要将部分处理好的数据 https://paddle3d.bj.bcebos.com/caddn/data/kitti_infos_val.pkl
+数据在 data/kitti/training下有一部分，还需要将部分处理好的数据 
+(https://paddle3d.bj.bcebos.com/caddn/data/kitti_infos_val.pkl),
+下载后放到data/kitti/下面
 ```
 
 
@@ -71,7 +74,7 @@ cd ../../../
 ```
 export CUDA_VISIBLE_DEVICES=0
 python export.py --config configs/caddn/caddn.yml --model_path model_path
-model_path 在 https://paddle3d.bj.bcebos.com/caddn/model/paddle_caddn.pdparams 需要下载
+model_path 在 (https://paddle3d.bj.bcebos.com/caddn/model/paddle_caddn.pdparams) 需要下载
 ```
 
 ### 推理
