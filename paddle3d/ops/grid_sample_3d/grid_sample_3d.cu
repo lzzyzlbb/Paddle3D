@@ -550,12 +550,13 @@ template <typename T, typename index_t>
             giz += bse_val * (ix - ix_tnw) * (iy - iy_tnw) * gOut;
           }
         }
-
-        T *gGrid_ptr_NDHW = grad_grid + index * grid_sW;
-        gGrid_ptr_NDHW[0] = gix_mult * gix;
-        gGrid_ptr_NDHW[1] = giy_mult * giy;
-        gGrid_ptr_NDHW[2] = giz_mult * giz;
-      } else if (mode == Mode::nearest) {
+        if (grad_grid != nullptr) {
+          T *gGrid_ptr_NDHW = grad_grid + index * grid_sW;
+          gGrid_ptr_NDHW[0] = gix_mult * gix;
+          gGrid_ptr_NDHW[1] = giy_mult * giy;
+          gGrid_ptr_NDHW[2] = giz_mult * giz;
+        }
+        } else if (mode == Mode::nearest) {
        
           auto ix_nearest = static_cast<index_t>(std::round(ix));
           auto iy_nearest = static_cast<index_t>(std::round(iy));
@@ -568,11 +569,12 @@ template <typename T, typename index_t>
             AtomicAdd3D(gInp_ptr_NC, iz_nearest, iy_nearest, ix_nearest,
                         inp_sD, inp_sH, inp_sW, in_d, in_h, in_w, grad_output[gOut_offset]);
           }
-        
-        T *gGrid_ptr_NDHW = grad_grid + index * grid_sW;
-        gGrid_ptr_NDHW[0] = static_cast<T>(0);
-        gGrid_ptr_NDHW[1] = static_cast<T>(0);
-        gGrid_ptr_NDHW[2] = static_cast<T>(0);
+        if (grad_grid != nullptr) {
+          T *gGrid_ptr_NDHW = grad_grid + index * grid_sW;
+          gGrid_ptr_NDHW[0] = static_cast<T>(0);
+          gGrid_ptr_NDHW[1] = static_cast<T>(0);
+          gGrid_ptr_NDHW[2] = static_cast<T>(0);
+        }
       }
     }
   }

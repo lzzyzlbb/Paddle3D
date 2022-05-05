@@ -14,17 +14,15 @@
 
 import numpy as np
 import paddle
-# from ....ops.iou3d_nms import iou3d_nms_utils
-# from ....utils import box_utils
+from paddle3d.utils.box import boxes3d_nearest_bev_iou
 
 class AxisAlignedTargetAssigner(object):
-    def __init__(self, anchor_generator_cfg, anchor_target_cfg, class_names, box_coder, match_height=False):
+    def __init__(self, anchor_generator_cfg, anchor_target_cfg, class_names, box_coder):
         super().__init__()
 
         self.anchor_generator_cfg = anchor_generator_cfg
         self.anchor_target_cfg = anchor_target_cfg
         self.box_coder = box_coder
-        self.match_height = match_height
         self.class_names = np.array(class_names)
         self.anchor_class_names = [config['class_name'] for config in anchor_generator_cfg]
         self.pos_fraction = anchor_target_cfg['pos_fraction'] if anchor_target_cfg['pos_fraction'] >= 0 else None
@@ -59,12 +57,11 @@ class AxisAlignedTargetAssigner(object):
             while cnt > 0 and cur_gt[cnt].sum() == 0:
                 cnt -= 1
             cur_gt = cur_gt[:cnt + 1]
-            cur_gt_classes = gt_classes[k][:cnt + 1].int()
-
+            cur_gt_classes = gt_classes[k][:cnt + 1].cast("int32")
             target_list = []
             for anchor_class_name, anchors in zip(self.anchor_class_names, all_anchors):
                 if cur_gt_classes.shape[0] > 1:
-                    mask = paddle.from_numpy(self.class_names[cur_gt_classes.cpu() - 1] == anchor_class_name)
+                    mask = paddle.to_tensor(self.class_names[cur_gt_classes.cpu().numpy() - 1] == anchor_class_name)
                 else:
                     mask = paddle.to_tensor([self.class_names[c - 1] == anchor_class_name
                                          for c in cur_gt_classes], dtype=paddle.bool)
@@ -72,7 +69,7 @@ class AxisAlignedTargetAssigner(object):
                 feature_map_size = anchors.shape[:3]
                 anchors = anchors.reshape([-1, anchors.shape[-1]])
                 selected_classes = cur_gt_classes[mask]
-
+                
                 single_target = self.assign_targets_single(
                     anchors,
                     cur_gt[mask],
@@ -80,29 +77,30 @@ class AxisAlignedTargetAssigner(object):
                     matched_threshold=self.matched_thresholds[anchor_class_name],
                     unmatched_threshold=self.unmatched_thresholds[anchor_class_name]
                 )
+                
                 target_list.append(single_target)
-
+          
             target_dict = {
-                'box_cls_labels': [t['box_cls_labels'].reshape(*feature_map_size, -1) for t in target_list],
-                'box_reg_targets': [t['box_reg_targets'].reshape(*feature_map_size, -1, self.box_coder.code_size)
+                'box_cls_labels': [t['box_cls_labels'].reshape([*feature_map_size, -1]) for t in target_list],
+                'box_reg_targets': [t['box_reg_targets'].reshape([*feature_map_size, -1], self.box_coder.code_size)
                                     for t in target_list],
-                'reg_weights': [t['reg_weights'].reshape(*feature_map_size, -1) for t in target_list]
+                'reg_weights': [t['reg_weights'].reshape([*feature_map_size, -1]) for t in target_list]
             }
             target_dict['box_reg_targets'] = paddle.concat(
-                target_dict['box_reg_targets'], dim=-2
-            ).reshape(-1, self.box_coder.code_size)
+                target_dict['box_reg_targets'], axis=-2
+            ).reshape([-1, self.box_coder.code_size])
 
-            target_dict['box_cls_labels'] = paddle.concat(target_dict['box_cls_labels'], dim=-1).reshape(-1)
-            target_dict['reg_weights'] = paddle.concat(target_dict['reg_weights'], dim=-1).reshape(-1)
+            target_dict['box_cls_labels'] = paddle.concat(target_dict['box_cls_labels'], axis=-1).reshape([-1])
+            target_dict['reg_weights'] = paddle.concat(target_dict['reg_weights'], axis=-1).reshape([-1])
 
             bbox_targets.append(target_dict['box_reg_targets'])
             cls_labels.append(target_dict['box_cls_labels'])
             reg_weights.append(target_dict['reg_weights'])
 
-        bbox_targets = paddle.stack(bbox_targets, dim=0)
+        bbox_targets = paddle.stack(bbox_targets, axis=0)
 
-        cls_labels = paddle.stack(cls_labels, dim=0)
-        reg_weights = paddle.stack(reg_weights, dim=0)
+        cls_labels = paddle.stack(cls_labels, axis=0)
+        reg_weights = paddle.stack(reg_weights, axis=0)
         all_targets_dict = {
             'box_cls_labels': cls_labels,
             'box_reg_targets': bbox_targets,
@@ -116,35 +114,37 @@ class AxisAlignedTargetAssigner(object):
         num_anchors = anchors.shape[0]
         num_gt = gt_boxes.shape[0]
 
-        labels = paddle.ones((num_anchors,), dtype=paddle.int32, device=anchors.device) * -1
-        gt_ids = paddle.ones((num_anchors,), dtype=paddle.int32, device=anchors.device) * -1
+        labels = paddle.ones((num_anchors,), dtype="int32") * -1
+        gt_ids = paddle.ones((num_anchors,), dtype="int32") * -1
 
         if len(gt_boxes) > 0 and anchors.shape[0] > 0:
-            anchor_by_gt_overlap = iou3d_nms_utils.boxes_iou3d_gpu(anchors[:, 0:7], gt_boxes[:, 0:7]) \
-                if self.match_height else box_utils.boxes3d_nearest_bev_iou(anchors[:, 0:7], gt_boxes[:, 0:7])
+            anchor_by_gt_overlap = boxes3d_nearest_bev_iou(anchors[:, 0:7], gt_boxes[:, 0:7])
 
-            anchor_to_gt_argmax = paddle.from_numpy(anchor_by_gt_overlap.cpu().numpy().argmax(axis=1)).cuda()
+            anchor_to_gt_argmax = paddle.to_tensor(anchor_by_gt_overlap.cpu().numpy().argmax(axis=1))
             anchor_to_gt_max = anchor_by_gt_overlap[
-                paddle.arange(num_anchors, device=anchors.device), anchor_to_gt_argmax
+                paddle.arange(num_anchors), anchor_to_gt_argmax
             ]
 
-            gt_to_anchor_argmax = paddle.from_numpy(anchor_by_gt_overlap.cpu().numpy().argmax(axis=0)).cuda()
-            gt_to_anchor_max = anchor_by_gt_overlap[gt_to_anchor_argmax, paddle.arange(num_gt, device=anchors.device)]
+            gt_to_anchor_argmax = paddle.to_tensor(anchor_by_gt_overlap.cpu().numpy().argmax(axis=0))
+            gt_to_anchor_max = anchor_by_gt_overlap[gt_to_anchor_argmax, paddle.arange(num_gt)]
             empty_gt_mask = gt_to_anchor_max == 0
             gt_to_anchor_max[empty_gt_mask] = -1
-
+                
             anchors_with_max_overlap = (anchor_by_gt_overlap == gt_to_anchor_max).nonzero()[:, 0]
-            gt_inds_force = anchor_to_gt_argmax[anchors_with_max_overlap]
-            labels[anchors_with_max_overlap] = gt_classes[gt_inds_force]
-            gt_ids[anchors_with_max_overlap] = gt_inds_force.int()
+            if anchors_with_max_overlap.shape[0] > 0:
+                gt_inds_force = anchor_to_gt_argmax[anchors_with_max_overlap]
+                labels[anchors_with_max_overlap] = gt_classes[gt_inds_force]
+                gt_ids[anchors_with_max_overlap] = gt_inds_force.cast("int32")
 
-            pos_inds = anchor_to_gt_max >= matched_threshold
-            gt_inds_over_thresh = anchor_to_gt_argmax[pos_inds]
-            labels[pos_inds] = gt_classes[gt_inds_over_thresh]
-            gt_ids[pos_inds] = gt_inds_over_thresh.int()
+            pos_inds = paddle.where(anchor_to_gt_max >= matched_threshold)[0]
+            
+            if pos_inds.shape[0] > 0:
+                gt_inds_over_thresh = anchor_to_gt_argmax[pos_inds]
+                labels[pos_inds] = gt_classes[gt_inds_over_thresh]
+                gt_ids[pos_inds] = gt_inds_over_thresh.cast("int32")
             bg_inds = (anchor_to_gt_max < unmatched_threshold).nonzero()[:, 0]
         else:
-            bg_inds = paddle.arange(num_anchors, device=anchors.device)
+            bg_inds = paddle.arange(num_anchors)
 
         fg_inds = (labels > 0).nonzero()[:, 0]
 
@@ -166,15 +166,14 @@ class AxisAlignedTargetAssigner(object):
                 labels[:] = 0
             else:
                 labels[bg_inds] = 0
-                labels[anchors_with_max_overlap] = gt_classes[gt_inds_force]
-
-        bbox_targets = anchors.new_zeros((num_anchors, self.box_coder.code_size))
-        if len(gt_boxes) > 0 and anchors.shape[0] > 0:
-            fg_gt_boxes = gt_boxes[anchor_to_gt_argmax[fg_inds], :]
-            fg_anchors = anchors[fg_inds, :]
+                # labels[anchors_with_max_overlap] = gt_classes[gt_inds_force]
+        bbox_targets = paddle.zeros(shape=[num_anchors, self.box_coder.code_size], dtype=anchors.dtype)
+        if gt_boxes.shape[0] > 0 and anchors.shape[0] > 0 and len(fg_inds) > 0:
+            fg_gt_boxes = paddle.gather(gt_boxes, index=anchor_to_gt_argmax[fg_inds], axis=0)
+            fg_anchors = paddle.gather(anchors, index=fg_inds, axis=0)
             bbox_targets[fg_inds, :] = self.box_coder.encode_paddle(fg_gt_boxes, fg_anchors)
 
-        reg_weights = anchors.new_zeros((num_anchors,))
+        reg_weights = paddle.zeros(shape=[num_anchors], dtype=anchors.dtype)
 
         if self.norm_by_num_examples:
             num_examples = (labels >= 0).sum()

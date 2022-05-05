@@ -66,4 +66,4 @@ PD_BUILD_GRAD_OP(grid_sample_3d)
     .Inputs({"x", "grid", paddle::Grad("out")})
     .Attrs({"mode: std::string", "padding_mode: std::string", "align_corners: bool"})
     .Outputs({paddle::Grad("x"), paddle::Grad("grid")})
-    .SetKernelFn(PD_KERNEL(GridSample3DBackward));
+    .SetKernelFn(PD_KERNEL(GridSample3DBackward)); 

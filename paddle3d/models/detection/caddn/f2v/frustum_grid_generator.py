@@ -18,6 +18,7 @@ import paddle.nn as nn
 
 from paddle3d.utils.grid import create_meshgrid3d, normalize_coords
 from paddle3d.utils.transform import project_to_image, transform_points_3d
+from paddle3d.utils.depth import bin_depths
 
 class FrustumGridGenerator(nn.Layer):
 
@@ -75,45 +76,7 @@ class FrustumGridGenerator(nn.Layer):
 
         return unproject
     
-    def bin_depths(self, depth_map, mode, depth_min, depth_max, num_bins, target=False):
-        """
-        Converts depth map into bin indices
-        Args:
-            depth_map: Depth Map
-            mode [string]: Discretiziation mode (See https://arxiv.org/pdf/2005.13423.pdf for more details)
-                UD: Uniform discretiziation
-                LID: Linear increasing discretiziation
-                SID: Spacing increasing discretiziation
-            depth_min [float]: Minimum depth value
-            depth_max [float]: Maximum depth value
-            num_bins [int]: Number of depth bins
-            target [bool]: Whether the depth bins indices will be used for a target tensor in loss comparison
-        Returns:
-            indices [Tensor(H, W)]: Depth bin indices
-        """
-        if mode == "UD":
-            bin_size = (depth_max - depth_min) / num_bins
-            indices = ((depth_map - depth_min) / bin_size)
-        elif mode == "LID":
-            bin_size = 2 * (depth_max - depth_min) / (num_bins * (1 + num_bins))
-            indices = -0.5 + 0.5 * paddle.sqrt(1 + 8 * (depth_map - depth_min) / bin_size)
-        elif mode == "SID":
-            indices = num_bins * (paddle.log(1 + depth_map) - math.log(1 + depth_min)) / \
-                (math.log(1 + depth_max) - math.log(1 + depth_min))
-        else:
-            raise NotImplementedError
-
-        if target:
-            # Remove indicies outside of bounds
-            mask = (indices < 0) | (indices > num_bins) | (~paddle.isfinite(indices))
-            indices[mask] = num_bins
-
-            # Convert to integer
-            indices = indices.type("int64")
-        return indices
-
-
-
+    
     def transform_grid(self, voxel_grid, grid_to_lidar, lidar_to_cam, cam_to_img):
         """
         Transforms voxel sampling grid into frustum sampling grid
@@ -143,7 +106,7 @@ class FrustumGridGenerator(nn.Layer):
         I_C = I_C.reshape([B, 1, 1, 3, 4])
         image_grid, image_depths = project_to_image(project=I_C, points=camera_grid)
         # Convert depths to depth bins
-        image_depths = self.bin_depths(depth_map=image_depths, **self.disc_cfg)
+        image_depths = bin_depths(depth_map=image_depths, **self.disc_cfg)
         # Stack to form frustum grid
         image_depths = image_depths.unsqueeze(-1)
         frustum_grid = paddle.concat((image_grid, image_depths), axis=-1)
@@ -172,9 +135,7 @@ class FrustumGridGenerator(nn.Layer):
         
         # Replace any NaNs or infinites with out of bounds
         mask = ~paddle.isfinite(frustum_grid)
-        B, X, Y, Z, P = paddle.shape(frustum_grid)
         sub_val = paddle.full(shape = paddle.shape(mask), fill_value=self.out_of_bounds_val)
         frustum_grid = paddle.where(mask, sub_val, frustum_grid)
-        # frustum_grid = frustum_grid.reshape([B, 1, 1, 1, 3]) # Todo: for dy to static
         
         return frustum_grid

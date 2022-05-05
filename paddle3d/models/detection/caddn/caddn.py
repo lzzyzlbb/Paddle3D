@@ -22,6 +22,7 @@ from paddle3d.models.layers import ConvBNReLU
 from .bev import BEV
 from .f2v import FrustumToVoxel
 import iou3d_nms
+from .ffe import FFE
 
 @manager.MODELS.add_component
 class CADDN(nn.Layer):
@@ -29,15 +30,15 @@ class CADDN(nn.Layer):
     """
 
     def __init__(self, backbone_3d, bev_cfg, dense_head, 
-                 class_head, channel_reduce_cfg, f2v_cfg, map_to_bev_cfg, post_process_cfg):
+                 class_head, ffe_cfg, f2v_cfg, disc_cfg, map_to_bev_cfg, post_process_cfg):
         super().__init__()
         self.backbone_3d = backbone_3d
         self.class_head = class_head
-        self.channel_reduce = ConvBNReLU(**channel_reduce_cfg)
+        self.ffe = FFE(ffe_cfg, disc_cfg=disc_cfg)
         self.map_to_bev = ConvBNReLU(**map_to_bev_cfg)
         self.backbone_2d = BEV(**bev_cfg)
         self.dense_head = dense_head
-        self.f2v = FrustumToVoxel(**f2v_cfg)
+        self.f2v = FrustumToVoxel(**f2v_cfg, disc_cfg=disc_cfg)
         self.post_process_cfg = post_process_cfg
         
     def forward(self, data, targets=None):
@@ -48,16 +49,14 @@ class CADDN(nn.Layer):
             data["image_shape"] = paddle.concat([h, w]).unsqueeze(0)
         # ffe
         image_features = self.backbone_3d(images)
+        self.class_head.eval()
         depth_logits = self.class_head(image_features)
-        b, c, h, w = paddle.shape(image_features[0])
-        depth_logits = F.interpolate(depth_logits, size=[h, w], mode='bilinear', align_corners=False)
-        image_features = self.channel_reduce(image_features[0])
-        frustum_features = self.create_frustum_features(image_features=image_features,
-                                                        depth_logits=depth_logits)
-        data["frustum_features"] = frustum_features
+        self.class_head.train()
+        data = self.ffe(image_features[0], depth_logits, data)
                                                     
         #   frustum_to_voxel  
         data = self.f2v(data)
+        
         # map_to_bev
         # voxel_features = voxel_features.reshape([])
         voxel_features = data["voxel_features"]
@@ -74,10 +73,10 @@ class CADDN(nn.Layer):
         if not self.training:
             return self.post_process(predictions)
         else:
-            loss = self.get_loss(predictions, targets)
+            loss = self.get_loss(predictions)
             return {'loss': loss}
         
-    def get_loss(self, predictions, targets):
+    def get_loss(self, predictions):
         disp_dict = {}
 
         loss_rpn, tb_dict_rpn = self.dense_head.get_loss()
@@ -185,28 +184,4 @@ class CADDN(nn.Layer):
 
 
     
-    def create_frustum_features(self, image_features, depth_logits):
-        """
-        Create image depth feature volume by multiplying image features with depth classification scores
-        Args:
-            image_features [torch.Tensor(N, C, H, W)]: Image features
-            depth_logits [torch.Tensor(N, D, H, W)]: Depth classification logits
-        Returns:
-            frustum_features [torch.Tensor(N, C, D, H, W)]: Image features
-        """
-        channel_dim = 1
-        depth_dim = 2
-
-        # Resize to match dimensions
-        image_features = image_features.unsqueeze(depth_dim)
-        depth_logits = depth_logits.unsqueeze(channel_dim)
-
-        # Apply softmax along depth axis and remove last depth category (> Max Range)
-        depth_probs = F.softmax(depth_logits, axis=depth_dim)
-        depth_probs = depth_probs[:, :, :-1]
-
-        # Multiply to form image depth feature volume
-        frustum_features = depth_probs * image_features
-        return frustum_features
-
-    
+  

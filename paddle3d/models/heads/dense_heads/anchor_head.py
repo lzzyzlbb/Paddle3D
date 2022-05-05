@@ -17,18 +17,21 @@ import paddle
 import paddle.nn as nn
 from paddle.nn.initializer import Constant
 from paddle.nn.initializer import Normal
+import paddle.nn.functional as F
 from paddle import ParamAttr
 from paddle3d.apis import manager
 from .target_assigner.axis_aligned_target_assigner import AxisAlignedTargetAssigner
 from .target_assigner.anchor_generator import AnchorGenerator
 from paddle3d.utils.box_coder import ResidualCoder
+from paddle3d.models.losses import SigmoidFocalClassificationLoss, \
+    WeightedCrossEntropyLoss, SmoothL1Loss
 
 __all__ = ['AnchorHeadSingle']
 
 @manager.HEADS.add_component
 class AnchorHeadSingle(nn.Layer):
     def __init__(self, model_cfg, input_channels, class_names, grid_size, point_cloud_range, anchor_target_cfg,
-                 predict_boxes_when_training, anchor_generator_cfg, num_dir_bins):
+                 predict_boxes_when_training, anchor_generator_cfg, num_dir_bins, loss_weights):
         super().__init__()
         self.model_cfg = model_cfg
         self.num_class = len(class_names)
@@ -36,14 +39,14 @@ class AnchorHeadSingle(nn.Layer):
         self.predict_boxes_when_training = predict_boxes_when_training
         self.anchor_generator_cfg = anchor_generator_cfg
         self.num_dir_bins = num_dir_bins
+        self.loss_weights = loss_weights
         self.box_coder = ResidualCoder(num_dir_bins=num_dir_bins)
         grid_size = np.array(grid_size)
-        anchors, self.num_anchors_per_location = self.generate_anchors(
+        self.anchors, self.num_anchors_per_location = self.generate_anchors(
             grid_size=grid_size, point_cloud_range=point_cloud_range,
             anchor_ndim=self.box_coder.code_size
         )
-        self.anchors = paddle.concat(anchors, axis=-3) # [x for x in anchors]
-
+        # [x for x in anchors]
         self.num_anchors_per_location = sum(self.num_anchors_per_location)
 
         self.conv_cls = nn.Conv2D(
@@ -65,7 +68,10 @@ class AnchorHeadSingle(nn.Layer):
             kernel_size=1
         )
         self.forward_ret_dict = {}
-
+        self.reg_loss_func = SmoothL1Loss(code_weights=paddle.to_tensor(loss_weights["code_weights"]))
+        self.cls_loss_func = SigmoidFocalClassificationLoss(alpha=0.25, gamma=2.0)
+        self.dir_loss_func = WeightedCrossEntropyLoss()
+        
         
     def generate_anchors(self, grid_size, point_cloud_range, anchor_ndim=7):
         anchor_generator = AnchorGenerator(
@@ -91,7 +97,9 @@ class AnchorHeadSingle(nn.Layer):
             batch_box_preds: (B, num_boxes, 7+C)
 
         """
-        num_anchors = paddle.shape(self.anchors.reshape([-1, paddle.shape(self.anchors)[5]]))[0]
+        anchors = paddle.concat(self.anchors, axis=-3) 
+            
+        num_anchors = paddle.shape(anchors.reshape([-1, paddle.shape(self.anchors)[5]]))[0]
         batch_anchors = self.anchors.reshape([1, -1, paddle.shape(self.anchors)[5]]).tile([batch_size, 1, 1])
         batch_cls_preds = cls_preds.reshape([batch_size, num_anchors, -1]) \
             if not isinstance(cls_preds, list) else cls_preds
@@ -104,7 +112,6 @@ class AnchorHeadSingle(nn.Layer):
             dir_limit_offset = self.model_cfg['dir_limit_offset']
             dir_cls_preds = dir_cls_preds.reshape([batch_size, num_anchors, -1]) if not isinstance(dir_cls_preds, list) \
                 else paddle.concat(dir_cls_preds, axis=1).reshape([batch_size, num_anchors, -1])
-            print(dir_cls_preds.shape)
             dir_labels = paddle.argmax(dir_cls_preds, axis=-1)
 
             period = (2 * np.pi / self.num_dir_bins)
@@ -132,11 +139,10 @@ class AnchorHeadSingle(nn.Layer):
         dir_cls_preds = self.conv_dir_cls(spatial_features_2d)
         dir_cls_preds = dir_cls_preds.transpose([0, 2, 3, 1])
         self.forward_ret_dict['dir_cls_preds'] = dir_cls_preds
-    
-
+            
         if self.training:
             targets_dict = self.target_assigner.assign_targets(
-                gt_boxes=data_dict['gt_boxes']
+                self.anchors, data_dict['gt_boxes']
             )
             self.forward_ret_dict.update(targets_dict)
 
@@ -175,25 +181,28 @@ class AnchorHeadSingle(nn.Layer):
             box_cls_labels[positives] = 1
 
         pos_normalizer = positives.sum(1, keepdim=True)
-        reg_weights /= paddle.clamp(pos_normalizer, min=1.0)
-        cls_weights /= paddle.clamp(pos_normalizer, min=1.0)
-        cls_targets = box_cls_labels * cared.type_as(box_cls_labels)
-        cls_targets = cls_targets.unsqueeze(dim=-1)
+        reg_weights /= paddle.clip(pos_normalizer, min=1.0)
+        cls_weights /= paddle.clip(pos_normalizer, min=1.0)
+        cls_targets = box_cls_labels * cared.cast(box_cls_labels.dtype)
 
-        cls_targets = cls_targets.squeeze(dim=-1)
-        one_hot_targets = paddle.zeros(
-            *list(cls_targets.shape), self.num_class + 1, dtype=cls_preds.dtype, device=cls_targets.device
-        )
-        one_hot_targets.scatter_(-1, cls_targets.unsqueeze(dim=-1).long(), 1.0)
-        cls_preds = cls_preds.reshape(batch_size, -1, self.num_class)
+        # one_hot_targets = paddle.zeros(
+        #    shape=[*list(cls_targets.shape), self.num_class + 1], dtype=cls_preds.dtype
+        #)
+        # cls_targets = cls_targets.unsqueeze(axis=-1)
+        one_hot_targets = []
+        for b in range(batch_size):
+            one_hot_targets.append(F.one_hot(cls_targets[b], num_classes=self.num_class + 1))
+        one_hot_targets = paddle.stack(one_hot_targets)
+        # paddle.scatter_(one_hot_targets, cls_targets.unsqueeze(axis=-1), paddle.to_tensor(1.0))
+        cls_preds = cls_preds.reshape([batch_size, -1, self.num_class])
         one_hot_targets = one_hot_targets[..., 1:]
         cls_loss_src = self.cls_loss_func(cls_preds, one_hot_targets, weights=cls_weights)  # [N, M]
         cls_loss = cls_loss_src.sum() / batch_size
-
-        cls_loss = cls_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['cls_weight']
+        cls_loss = cls_loss * self.loss_weights['cls_weight']
         tb_dict = {
             'rpn_loss_cls': cls_loss.item()
         }
+        
         return cls_loss, tb_dict
 
     def get_box_reg_layer_loss(self):
@@ -204,61 +213,68 @@ class AnchorHeadSingle(nn.Layer):
         batch_size = int(box_preds.shape[0])
 
         positives = box_cls_labels > 0
-        reg_weights = positives
+        reg_weights = positives.cast("float32")
         pos_normalizer = positives.sum(1, keepdim=True)
-        reg_weights /= paddle.clamp(pos_normalizer, min=1.0)
-
-        if isinstance(self.anchors, list):
-            if self.use_multihead:
-                anchors = paddle.concat(
-                    [anchor.transpose([3, 4, 0, 1, 2, 5]).reshape([-1, anchor.shape[-1]]) for anchor in
-                     self.anchors], axis=0)
-            else:
-                anchors = paddle.concat(self.anchors, axis=-3)
-        else:
-            anchors = self.anchors
+        reg_weights /= paddle.clip(pos_normalizer, min=1.0)
+        
+        anchors = paddle.concat(self.anchors, axis=-3) 
+            
         anchors = anchors.reshape([1, -1, anchors.shape[-1]]).tile([batch_size, 1, 1])
         box_preds = box_preds.reshape([batch_size, -1,
                                    box_preds.shape[-1] // self.num_anchors_per_location])
         # sin(a - b) = sinacosb-cosasinb
         box_preds_sin, reg_targets_sin = self.add_sin_difference(box_preds, box_reg_targets)
-        loc_loss_src = self.reg_loss_func(box_preds_sin, reg_targets_sin, weights=reg_weights)  # [N, M]
+        loc_loss_src = self.reg_loss_func(box_preds_sin, reg_targets_sin, \
+                                        weights=reg_weights)  # [N, M]
         loc_loss = loc_loss_src.sum() / batch_size
 
-        loc_loss = loc_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight']
+        loc_loss = loc_loss * self.loss_weights['loc_weight']
         box_loss = loc_loss
         tb_dict = {
             'rpn_loss_loc': loc_loss.item()
         }
-
+        
         if box_dir_cls_preds is not None:
             dir_targets = self.get_direction_target(
                 anchors, box_reg_targets,
-                dir_offset=self.model_cfg.DIR_OFFSET,
-                num_bins=self.model_cfg.NUM_DIR_BINS
+                dir_offset=self.model_cfg['dir_offset'],
+                num_bins=self.num_dir_bins
             )
 
-            dir_logits = box_dir_cls_preds.reshape([batch_size, -1, self.model_cfg.NUM_DIR_BINS])
-            weights = positives.type_as(dir_logits)
-            weights /= paddle.clamp(weights.sum(-1, keepdim=True), min=1.0)
+            dir_logits = box_dir_cls_preds.reshape([batch_size, -1, self.num_dir_bins])
+            weights = positives.cast("float32")
+            weights /= paddle.clip(weights.sum(-1, keepdim=True), min=1.0)
             dir_loss = self.dir_loss_func(dir_logits, dir_targets, weights=weights)
             dir_loss = dir_loss.sum() / batch_size
-            dir_loss = dir_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['dir_weight']
+            dir_loss = dir_loss * self.loss_weights['dir_weight']
             box_loss += dir_loss
             tb_dict['rpn_loss_dir'] = dir_loss.item()
 
         return box_loss, tb_dict
 
-    def get_direction_target(anchors, reg_targets, one_hot=True, dir_offset=0, num_bins=2):
+    def add_sin_difference(self, boxes1, boxes2, dim=6):  
+        assert dim != -1
+        rad_pred_encoding = paddle.sin(boxes1[..., dim:dim + 1]) * paddle.cos(boxes2[..., dim:dim + 1])
+        rad_tg_encoding = paddle.cos(boxes1[..., dim:dim + 1]) * paddle.sin(boxes2[..., dim:dim + 1])
+        boxes1 = paddle.concat([boxes1[..., :dim], rad_pred_encoding, boxes1[..., dim + 1:]], axis=-1)
+        boxes2 = paddle.concat([boxes2[..., :dim], rad_tg_encoding, boxes2[..., dim + 1:]], axis=-1)
+        return boxes1, boxes2
+
+    def get_direction_target(self, anchors, reg_targets, one_hot=True, dir_offset=0, num_bins=2):
         batch_size = reg_targets.shape[0]
+        
         anchors = anchors.reshape([batch_size, -1, anchors.shape[-1]])
         rot_gt = reg_targets[..., 6] + anchors[..., 6]
-        offset_rot = common_utils.limit_period(rot_gt - dir_offset, 0, 2 * np.pi)
-        dir_cls_targets = paddle.floor(offset_rot / (2 * np.pi / num_bins))
-        dir_cls_targets = paddle.clamp(dir_cls_targets, min=0, max=num_bins - 1)
+        offset_rot = self.limit_period(rot_gt - dir_offset, 0, 2 * np.pi)
+        dir_cls_targets = paddle.floor(offset_rot / (2 * np.pi / num_bins)).cast("int64")
+        dir_cls_targets = paddle.clip(dir_cls_targets, min=0, max=num_bins - 1)
 
         if one_hot:
-            dir_targets = paddle.zeros(*list(dir_cls_targets.shape), num_bins, dtype=anchors.dtype)
-            dir_targets.scatter_(-1, dir_cls_targets.unsqueeze(dim=-1), 1.0)
-            dir_cls_targets = dir_targets
+            # dir_targets = paddle.zeros([*list(dir_cls_targets.shape), num_bins], dtype=anchors.dtype)
+            # dir_targets.scatter_(-1, dir_cls_targets.unsqueeze(dim=-1), 1.0)
+            # dir_cls_targets = dir_targets
+            dir_targets = []
+            for b in range(batch_size):
+                dir_targets.append(F.one_hot(dir_cls_targets[b], num_classes=num_bins))
+            dir_cls_targets = paddle.stack(dir_targets)
         return dir_cls_targets

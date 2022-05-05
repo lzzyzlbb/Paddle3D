@@ -21,7 +21,7 @@ from .sampler import Sampler
 
 class FrustumToVoxel(nn.Layer):
 
-    def __init__(self, grid_size, pc_range, disc_cfg, sample_cfg):
+    def __init__(self, grid_size, pc_range, sample_cfg, disc_cfg):
         """
         Initializes module to transform frustum features to voxel features via 3D transformation and sampling
         Args:
@@ -58,6 +58,7 @@ class FrustumToVoxel(nn.Layer):
         # Sample frustum volume to generate voxel volume
         voxel_features = self.sampler(input_features=batch_dict["frustum_features"],
                                       grid=grid)  # (B, C, X, Y, Z)
+        
         # (B, C, X, Y, Z) -> (B, C, Z, Y, X)
         voxel_features = voxel_features.transpose([0, 1, 4, 3, 2])
         batch_dict["voxel_features"] = voxel_features

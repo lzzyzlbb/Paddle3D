@@ -12,4 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .focal_loss import FocalLoss
+from .focal_loss import FocalLoss, MultiFocalLoss, SigmoidFocalClassificationLoss
+from .cross_entropy_loss import WeightedCrossEntropyLoss
+from .smooth_l1_loss import SmoothL1Loss

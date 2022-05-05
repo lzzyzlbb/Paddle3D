@@ -31,8 +31,8 @@ class ResidualCoder(object):
         Returns:
 
         """
-        anchors[:, 3:6] = paddle.clamp_min(anchors[:, 3:6], min=1e-5)
-        boxes[:, 3:6] = paddle.clamp_min(boxes[:, 3:6], min=1e-5)
+        anchors[:, 3:6] = paddle.clip(anchors[:, 3:6], min=1e-5)
+        boxes[:, 3:6] = paddle.clip(boxes[:, 3:6], min=1e-5)
 
         xa, ya, za, dxa, dya, dza, ra, *cas = paddle.split(anchors, 7, axis=-1)
         xg, yg, zg, dxg, dyg, dzg, rg, *cgs = paddle.split(boxes, 7, axis=-1)
