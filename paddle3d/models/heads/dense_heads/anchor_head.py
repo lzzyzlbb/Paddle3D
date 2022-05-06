@@ -46,6 +46,8 @@ class AnchorHeadSingle(nn.Layer):
             grid_size=grid_size, point_cloud_range=point_cloud_range,
             anchor_ndim=self.box_coder.code_size
         )
+        if self.training:
+            self.anchors = paddle.concat(self.anchors, axis=-3) 
         # [x for x in anchors]
         self.num_anchors_per_location = sum(self.num_anchors_per_location)
 
@@ -72,7 +74,6 @@ class AnchorHeadSingle(nn.Layer):
         self.cls_loss_func = SigmoidFocalClassificationLoss(alpha=0.25, gamma=2.0)
         self.dir_loss_func = WeightedCrossEntropyLoss()
         
-        
     def generate_anchors(self, grid_size, point_cloud_range, anchor_ndim=7):
         anchor_generator = AnchorGenerator(
             anchor_range=point_cloud_range,
@@ -97,10 +98,10 @@ class AnchorHeadSingle(nn.Layer):
             batch_box_preds: (B, num_boxes, 7+C)
 
         """
-        anchors = paddle.concat(self.anchors, axis=-3) 
-            
-        num_anchors = paddle.shape(anchors.reshape([-1, paddle.shape(self.anchors)[5]]))[0]
-        batch_anchors = self.anchors.reshape([1, -1, paddle.shape(self.anchors)[5]]).tile([batch_size, 1, 1])
+        # anchors = paddle.concat(self.anchors, axis=-3) 
+        anchors = self.anchors  
+        num_anchors = paddle.shape(anchors.reshape([-1, paddle.shape(anchors)[5]]))[0]
+        batch_anchors = anchors.reshape([1, -1, paddle.shape(anchors)[5]]).tile([batch_size, 1, 1])
         batch_cls_preds = cls_preds.reshape([batch_size, num_anchors, -1]) \
             if not isinstance(cls_preds, list) else cls_preds
         batch_box_preds = box_preds.reshape([batch_size, num_anchors, -1]) if not isinstance(box_preds, list) \
@@ -127,6 +128,7 @@ class AnchorHeadSingle(nn.Layer):
         return ans
 
     def forward(self, data_dict):
+        
         spatial_features_2d = data_dict['spatial_features_2d']
         cls_preds = self.conv_cls(spatial_features_2d)
         box_preds = self.conv_box(spatial_features_2d)
@@ -146,7 +148,7 @@ class AnchorHeadSingle(nn.Layer):
             )
             self.forward_ret_dict.update(targets_dict)
 
-        if not self.training:
+        else:
             batch_cls_preds, batch_box_preds = self.generate_predicted_boxes(
                 batch_size=1,
                 cls_preds=cls_preds, box_preds=box_preds, dir_cls_preds=dir_cls_preds
@@ -226,6 +228,7 @@ class AnchorHeadSingle(nn.Layer):
         box_preds_sin, reg_targets_sin = self.add_sin_difference(box_preds, box_reg_targets)
         loc_loss_src = self.reg_loss_func(box_preds_sin, reg_targets_sin, \
                                         weights=reg_weights)  # [N, M]
+        
         loc_loss = loc_loss_src.sum() / batch_size
 
         loc_loss = loc_loss * self.loss_weights['loc_weight']
@@ -249,7 +252,6 @@ class AnchorHeadSingle(nn.Layer):
             dir_loss = dir_loss * self.loss_weights['dir_weight']
             box_loss += dir_loss
             tb_dict['rpn_loss_dir'] = dir_loss.item()
-
         return box_loss, tb_dict
 
     def add_sin_difference(self, boxes1, boxes2, dim=6):  
