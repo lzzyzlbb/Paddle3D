@@ -189,13 +189,15 @@ class Trainer:
         if self.val_dataset is None:
             raise RuntimeError
         with logger.processing('evaluate on validate dataset'):
-            for sample in self.eval_dataloader:
+            for step_id, sample in enumerate(self.eval_dataloader):
                 # list in list out
                 pred_dicts = validation_step(self.model, sample)
                 results += self.val_dataset.generate_prediction_dicts(
                         sample, pred_dicts,
                         output_path= None
                     )
+                if step_id % 1 == 0:
+                    logger.info("Eval iter: {}\n".format(step_id))
             metrics = self.val_dataset.evaluation(results)
             logger.info(metrics)
         return metrics
