@@ -42,12 +42,11 @@ class AnchorHeadSingle(nn.Layer):
         self.loss_weights = loss_weights
         self.box_coder = ResidualCoder(num_dir_bins=num_dir_bins)
         grid_size = np.array(grid_size)
-        self.anchors, self.num_anchors_per_location = self.generate_anchors(
+        self.anchors_list, self.num_anchors_per_location = self.generate_anchors(
             grid_size=grid_size, point_cloud_range=point_cloud_range,
             anchor_ndim=self.box_coder.code_size
         )
-        if self.training:
-            self.anchors = paddle.concat(self.anchors, axis=-3) 
+        self.anchors = paddle.concat(self.anchors_list, axis=-3) 
         # [x for x in anchors]
         self.num_anchors_per_location = sum(self.num_anchors_per_location)
 
@@ -99,7 +98,7 @@ class AnchorHeadSingle(nn.Layer):
 
         """
         # anchors = paddle.concat(self.anchors, axis=-3) 
-        anchors = self.anchors  
+        anchors = self.anchors
         num_anchors = paddle.shape(anchors.reshape([-1, paddle.shape(anchors)[5]]))[0]
         batch_anchors = anchors.reshape([1, -1, paddle.shape(anchors)[5]]).tile([batch_size, 1, 1])
         batch_cls_preds = cls_preds.reshape([batch_size, num_anchors, -1]) \
@@ -144,7 +143,7 @@ class AnchorHeadSingle(nn.Layer):
             
         if self.training:
             targets_dict = self.target_assigner.assign_targets(
-                self.anchors, data_dict['gt_boxes']
+                self.anchors_list, data_dict['gt_boxes']
             )
             self.forward_ret_dict.update(targets_dict)
 
@@ -205,7 +204,7 @@ class AnchorHeadSingle(nn.Layer):
             'rpn_loss_cls': cls_loss.item()
         }
         
-        return cls_loss, tb_dict
+        return cls_loss_src.sum(), tb_dict
 
     def get_box_reg_layer_loss(self):
         box_preds = self.forward_ret_dict['box_preds']
@@ -219,7 +218,7 @@ class AnchorHeadSingle(nn.Layer):
         pos_normalizer = positives.sum(1, keepdim=True)
         reg_weights /= paddle.clip(pos_normalizer, min=1.0)
         
-        anchors = paddle.concat(self.anchors, axis=-3) 
+        anchors = self.anchors
             
         anchors = anchors.reshape([1, -1, anchors.shape[-1]]).tile([batch_size, 1, 1])
         box_preds = box_preds.reshape([batch_size, -1,

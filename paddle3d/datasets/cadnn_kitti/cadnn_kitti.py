@@ -19,6 +19,7 @@ import pickle
 import numpy as np
 from skimage import io
 import skimage.transform
+from collections import defaultdict
 import paddle
 from paddle3d.apis import manager
 from .calibration_kitti import Calibration
@@ -27,6 +28,23 @@ from .box_utils import boxes_to_corners_3d, in_hull, boxes3d_lidar_to_kitti_came
      boxes3d_kitti_camera_to_imageboxes, boxes3d_kitti_camera_to_lidar, mask_boxes_outside_range_numpy
 from .common_utils import drop_info_with_name, keep_arrays_by_name, mask_points_by_range
 import paddle3d.transforms as T
+
+def get_pad_params(desired_size, cur_size):
+    """
+    Get padding parameters for np.pad function
+    Args:
+        desired_size [int]: Desired padded output size
+        cur_size [int]: Current size. Should always be less than or equal to cur_size
+    Returns:
+        pad_params [tuple(int)]: Number of values padded to the edges (before, after)
+    """
+    assert desired_size >= cur_size
+
+    # Calculate amount to pad
+    diff = desired_size - cur_size
+    pad_params = (0, diff)
+
+    return pad_params
 
 
 @manager.DATASETS.add_component
@@ -54,6 +72,10 @@ class KittiCadnnDataset(paddle.io.Dataset):
         self.training = mode == 'train'
         self.kitti_infos = []
         self.include_kitti_data(self.mode)
+
+    @property
+    def is_train_mode(self) -> bool:
+        return 'train' in self.mode
 
     def include_kitti_data(self, mode):
         kitti_infos = []
@@ -95,6 +117,11 @@ class KittiCadnnDataset(paddle.io.Dataset):
         image = image[:, :, :3]  # Remove alpha channel
         image = image.astype(np.float32)
         image /= 255.0
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        image -= mean
+        image /= std
+        image = image.transpose([2,0,1])
         return image
 
     def get_image_shape(self, idx):
@@ -184,7 +211,7 @@ class KittiCadnnDataset(paddle.io.Dataset):
             R0_4x4[3, 3] = 1.
             R0_4x4[:3, :3] = calib.R0
             V2C_4x4 = np.concatenate([calib.V2C, np.array([[0., 0., 0., 1.]])], axis=0)
-            calib_info = {'P2': P2, 'R0_rect': R0_4x4, 'Tr_velo_to_cam': V2C_4x4}
+            calib_info = {'P2': P2, 'R0': R0_4x4, 'Tr_velo2cam': V2C_4x4}
 
             info['calib'] = calib_info
 
@@ -315,13 +342,16 @@ class KittiCadnnDataset(paddle.io.Dataset):
         V2R = R0 @ V2C
         data_dict.update({
             "trans_lidar_to_cam": V2R,
-            "trans_cam_to_img": calib.P2
+            "trans_cam_to_img": calib.P2,
+            "R0": calib.R0,
+            "Tr_velo2cam": calib.V2C
         })
-
+        del data_dict["calib"]
+        del data_dict["frame_id"]
         return data_dict
 
-    @staticmethod
-    def generate_prediction_dicts(batch_dict, pred_dicts, class_names, output_path=None):
+    # @staticmethod
+    def generate_prediction_dicts(self, batch_dict, pred_dicts, output_path=None):
         """
         Args:
             batch_dict:
@@ -349,19 +379,23 @@ class KittiCadnnDataset(paddle.io.Dataset):
         def generate_single_sample_dict(batch_index, box_dict):
             pred_scores = box_dict['pred_scores'].cpu().numpy()
             pred_boxes = box_dict['pred_boxes'].cpu().numpy()
-            pred_labels = box_dict['pred_labels'].cpu().numpy()
-            pred_dict = get_template_prediction(pred_scores.shape[0])
-            if pred_scores.shape[0] == 0:
+            pred_labels = box_dict['pred_labels'].cast("int64").cpu().numpy()
+            if pred_labels[0] < 0:
+                pred_dict = get_template_prediction(0)
                 return pred_dict
-
-            calib = batch_dict['calib'][batch_index]
+            
+            pred_dict = get_template_prediction(pred_scores.shape[0])
+            # calib = batch_dict['calib'][batch_index]
+            calib = Calibration({"P2": batch_dict["trans_cam_to_img"][batch_index].cpu().numpy(), 
+                                 "R0":batch_dict["R0"][batch_index].cpu().numpy(), 
+                                 "Tr_velo2cam":batch_dict["Tr_velo2cam"][batch_index].cpu().numpy()})
             image_shape = batch_dict['image_shape'][batch_index].cpu().numpy()
             pred_boxes_camera = boxes3d_lidar_to_kitti_camera(pred_boxes, calib)
             pred_boxes_img = boxes3d_kitti_camera_to_imageboxes(
                 pred_boxes_camera, calib, image_shape=image_shape
             )
 
-            pred_dict['name'] = np.array(class_names)[pred_labels - 1]
+            pred_dict['name'] = np.array(self.class_names)[pred_labels - 1]
             pred_dict['alpha'] = -np.arctan2(-pred_boxes[:, 1], pred_boxes[:, 0]) + pred_boxes_camera[:, 6]
             pred_dict['bbox'] = pred_boxes_img
             pred_dict['dimensions'] = pred_boxes_camera[:, 3:6]
@@ -374,10 +408,10 @@ class KittiCadnnDataset(paddle.io.Dataset):
 
         annos = []
         for index, box_dict in enumerate(pred_dicts):
-            frame_id = batch_dict['frame_id'][index]
+            # frame_id = batch_dict['frame_id'][index]
 
             single_pred_dict = generate_single_sample_dict(index, box_dict)
-            single_pred_dict['frame_id'] = frame_id
+            # single_pred_dict['frame_id'] = frame_id
             annos.append(single_pred_dict)
 
             if output_path is not None:
@@ -397,7 +431,7 @@ class KittiCadnnDataset(paddle.io.Dataset):
 
         return annos
 
-    def evaluation(self, det_annos, class_names, **kwargs):
+    def evaluation(self, det_annos, **kwargs):
         if 'annos' not in self.kitti_infos[0].keys():
             return None, {}
 
@@ -405,9 +439,9 @@ class KittiCadnnDataset(paddle.io.Dataset):
 
         eval_det_annos = copy.deepcopy(det_annos)
         eval_gt_annos = [copy.deepcopy(info['annos']) for info in self.kitti_infos]
-        ap_result_str, ap_dict = kitti_eval.get_official_eval_result(eval_gt_annos, eval_det_annos, class_names)
+        ap_result_str, ap_dict = kitti_eval.get_official_eval_result(eval_gt_annos, eval_det_annos, self.class_names)
 
-        return ap_result_str, ap_dict
+        return ap_result_str# , ap_dict
     
     def mask_points_and_boxes_outside_range(self, data_dict):
         
@@ -503,13 +537,13 @@ class KittiCadnnDataset(paddle.io.Dataset):
         sample_idx = info['point_cloud']['lidar_idx']
         calib = self.get_calib(sample_idx)
         img_shape = info['image']['image_shape']
-
         input_dict = {
             'frame_id': sample_idx,
             'calib': calib,
+            'calib_info': info['calib'],
             'image_shape': img_shape
         }
-
+        
         if 'annos' in info:
             annos = info['annos']
             annos = drop_info_with_name(annos, name='DontCare')
@@ -529,10 +563,75 @@ class KittiCadnnDataset(paddle.io.Dataset):
             if road_plane is not None:
                 input_dict['road_plane'] = road_plane
 
-        input_dict = self.update_data(data_dict=input_dict)
-        data_dict = self.prepare_data(data_dict=input_dict)
+        data_dict = self.update_data(data_dict=input_dict)
+        data_dict = self.prepare_data(data_dict=data_dict)
         data_dict['image_shape'] = img_shape
         return data_dict
+
+    @staticmethod
+    def collate_fn(batch_list, _unused=False):
+        data_dict = defaultdict(list)
+        for cur_sample in batch_list:
+            for key, val in cur_sample.items():
+                data_dict[key].append(val)
+        batch_size = len(batch_list)
+        ret = {}
+        for key, val in data_dict.items():
+            try:
+                if key in ['gt_boxes']:
+                    max_gt = max([len(x) for x in val])
+                    batch_gt_boxes3d = np.zeros((batch_size, max_gt, val[0].shape[-1]), dtype=np.float32)
+                    for k in range(batch_size):
+                        batch_gt_boxes3d[k, :val[k].__len__(), :] = val[k]
+                    ret[key] = batch_gt_boxes3d
+                elif key in ['gt_boxes2d']:
+                    max_boxes = 0
+                    max_boxes = max([len(x) for x in val])
+                    batch_boxes2d = np.zeros((batch_size, max_boxes, val[0].shape[-1]), dtype=np.float32)
+                    for k in range(batch_size):
+                        if val[k].size > 0:
+                            batch_boxes2d[k, :val[k].__len__(), :] = val[k]
+                    ret[key] = batch_boxes2d
+                elif key in ["images", "depth_maps"]:
+                    # Get largest image size (H, W)
+                    max_h = 0
+                    max_w = 0
+                    for image in val:
+                        max_h = max(max_h, image.shape[0])
+                        max_w = max(max_w, image.shape[1])
+
+                    # Change size of images
+                    images = []
+                    for image in val:
+                        pad_h = get_pad_params(desired_size=max_h, cur_size=image.shape[0])
+                        pad_w = get_pad_params(desired_size=max_w, cur_size=image.shape[1])
+                        pad_width = (pad_h, pad_w)
+                        # Pad with nan, to be replaced later in the pipeline.
+                        pad_value = np.nan
+
+                        if key == "images":
+                            pad_width = (pad_h, pad_w, (0, 0))
+                        elif key == "depth_maps":
+                            pad_width = (pad_h, pad_w)
+
+                        image_pad = np.pad(image,
+                                           pad_width=pad_width,
+                                           mode='constant',
+                                           constant_values=pad_value)
+
+                        images.append(image_pad)
+                    ret[key] = np.stack(images, axis=0)
+                elif key in "calib_info":
+                    continue
+                else:
+                    ret[key] = np.stack(val, axis=0)
+                
+            except:
+                print('Error in collate_batch: key=%s' % key)
+                raise TypeError
+
+        ret['batch_size'] = batch_size
+        return ret
 
 def create_kitti_infos(dataset_cfg, class_names, data_path, save_path, workers=4):
     dataset = KittiDataset(dataset_cfg=dataset_cfg, class_names=class_names, dataset_root=data_path, training=False)

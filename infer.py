@@ -93,28 +93,33 @@ def main(args):
     input_tensor1 = predictor.get_input_handle(input_names[0])
     input_tensor2 = predictor.get_input_handle(input_names[1])
     input_tensor3 = predictor.get_input_handle(input_names[2])
-    out = predictor.get_output_handle(output_names[0])
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
     n = len(data_p)   
-    for i in range(0, 8): #data, data_tensor in zip(dataset, loader):
+    for i in range(0, 5): #data, data_tensor in zip(dataset, loader):
         # forward
         data = data_p[i]
-        data['images'] -= mean
-        data['images'] /= std
-        data["images"] = np.expand_dims(data["images"], axis=0).transpose([0,3,1,2])
+        # data['images'] -= mean
+        # data['images'] /= std
+        data["images"] = np.expand_dims(data["images"], axis=0)
         data["trans_lidar_to_cam"] = np.expand_dims(data["trans_lidar_to_cam"], axis=0)
         data["trans_cam_to_img"] = np.expand_dims(data["trans_cam_to_img"], axis=0)
         input_tensor1.copy_from_cpu(data[input_names[0]])
         input_tensor2.copy_from_cpu(data[input_names[1]])
         input_tensor3.copy_from_cpu(data[input_names[2]])
         predictor.run()
-        
-        out1 = out.copy_to_cpu()
+        outs = []
+        for name in output_names:
+            out = predictor.get_output_handle(name)
+            out = out.copy_to_cpu()
+            out = paddle.to_tensor(out)
+            outs.append(out)
+       
         res = {}
-        res['pred_scores'] = out1[:, 0]
-        res['pred_boxes'] = out1[:, 0:8]
-        res['pred_labels'] = out1[:, 8]
+        res['pred_boxes'] = outs[0]
+        res['pred_labels'] = outs[1]
+        res['pred_scores'] = outs[2]
+        
         print(res)
         
 

@@ -602,17 +602,17 @@ std::vector<paddle::Tensor> GridSample3DCUDABackward(const paddle::Tensor& x,
       enum_mode = Mode::bilinear;
     }
 
-    const int n = grid.shape()[0];
     const int out_d = grid.shape()[1];
     const int out_h = grid.shape()[2];
     const int out_w = grid.shape()[3];
+    const int n = x.shape()[0];
     const int c = x.shape()[1];
     const int in_d = x.shape()[2];
     const int in_h = x.shape()[3];
     const int in_w = x.shape()[4];
     
     auto grid_grad_output = paddle::Tensor(paddle::PlaceType::kGPU, {n, out_d, out_h, out_w, 3});
-    auto x_grad_output = paddle::Tensor(paddle::PlaceType::kGPU, {n, c, out_d, out_h, out_w});
+    auto x_grad_output = paddle::Tensor(paddle::PlaceType::kGPU, {n, c, in_d, in_h, in_w});
     const int count = static_cast<int>(n * out_d * out_h * out_w);
     
     int max_threads_per_block = 512;
@@ -638,5 +638,5 @@ std::vector<paddle::Tensor> GridSample3DCUDABackward(const paddle::Tensor& x,
                 align_corners);
          
     
-    return {x_grad_output, grid_grad_output};
+    return {x_grad_output}; // , grid_grad_output};
 }

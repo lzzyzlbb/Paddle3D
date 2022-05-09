@@ -49,6 +49,7 @@ class FFE(nn.Layer):
                 frustum_features [paddle.Tensor(N, C, D, H_out, W_out)]: Image depth features
         """
         # Pixel-wise depth classification
+        
         b, c, h, w = paddle.shape(image_features)
         depth_logits = F.interpolate(depth_logits, size=[h, w], mode='bilinear', align_corners=False)
         image_features = self.channel_reduce(image_features)

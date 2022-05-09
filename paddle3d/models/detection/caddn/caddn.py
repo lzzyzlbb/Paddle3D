@@ -41,7 +41,7 @@ class CADDN(nn.Layer):
         self.f2v = FrustumToVoxel(**f2v_cfg, disc_cfg=disc_cfg)
         self.post_process_cfg = post_process_cfg
         
-    def forward(self, data, targets=None):
+    def forward(self, data):
         images = data["images"]
         if not self.training:
             b, c, h, w = paddle.shape(images)
@@ -49,9 +49,8 @@ class CADDN(nn.Layer):
             data["image_shape"] = paddle.concat([h, w]).unsqueeze(0)
         # ffe
         image_features = self.backbone_3d(images)
-        self.class_head.eval()
+        
         depth_logits = self.class_head(image_features)
-        self.class_head.train()
         data = self.ffe(image_features[0], depth_logits, data)
                                                     
         #   frustum_to_voxel  
@@ -69,7 +68,20 @@ class CADDN(nn.Layer):
         # backbone_2d
         data = self.backbone_2d(data)
         predictions = self.dense_head(data)
+        """
+        import pickle
+        res = {}
+            
+        with open('/workspace/paddle/CaDDN/res.p', 'wb') as f:
+            for k in predictions:
+                try:
+                    res[k] = predictions[k].cpu().numpy()
+                except:
+                    print(k)
+            pickle.dump(res, f, protocol=pickle.HIGHEST_PROTOCOL)
         
+        # exit()
+        """
         if not self.training:
             return self.post_process(predictions)
         else:
@@ -146,8 +158,14 @@ class CADDN(nn.Layer):
             ) 
             record_dict = paddle.concat([selected_score.unsqueeze(1), selected_box, selected_label.unsqueeze(1)], axis=1)
             
+            record_dict = {
+                'pred_boxes': selected_box,
+                'pred_scores': selected_score,
+                'pred_labels': selected_label
+            }
+            
             pred_dicts.append(record_dict)
-        return paddle.concat(pred_dicts)
+        return pred_dicts #paddle.concat(pred_dicts)
 
 
     def class_agnostic_nms(self, box_scores, box_preds, label_preds, nms_config, score_thresh):

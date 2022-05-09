@@ -16,7 +16,7 @@ import abc
 import copy
 import os
 import shutil
-from typing import Hashable, Generic
+from typing import Hashable, Generic, Optional
 
 import paddle
 import yaml
@@ -30,12 +30,22 @@ class CheckpointABC(abc.ABC):
     """
 
     @abc.abstractmethod
-    def push(self, state_dict: dict):
+    def get(self, tag: Optional[str] = None) -> dict:
         """
         """
 
     @abc.abstractmethod
-    def pop(self) -> dict:
+    def push(self, state_dict: dict, tag: Optional[str] = None):
+        """
+        """
+
+    @abc.abstractmethod
+    def pop(self) -> str:
+        """
+        """
+
+    @abc.abstractproperty
+    def empty(self) -> bool:
         """
         """
 
@@ -51,6 +61,11 @@ class CheckpointABC(abc.ABC):
 
     @abc.abstractproperty
     def metafile(self) -> str:
+        """
+        """
+
+    @abc.abstractproperty
+    def rootdir(self) -> str:
         """
         """
 
@@ -65,10 +80,12 @@ class Checkpoint(CheckpointABC):
                  overwrite: bool = True):
         self.save_dir = save_dir
         self._meta = EasyDict()
+
         self._meta.overwrite = overwrite
         self._meta.keep_checkpoint_max = keep_checkpoint_max
-        self._meta.queue = []
         self._meta.counter = 0
+
+        self._meta.queue = []
 
         os.makedirs(self.save_dir, exist_ok=True)
 
@@ -79,39 +96,70 @@ class Checkpoint(CheckpointABC):
 
         self._sync_to_file()
 
-    def push(self, state_dict: dict):
+    def get(self, tag: Optional[str] = None) -> dict:
         """
         """
-        dirname = os.path.join(self.save_dir, str(self._meta.counter))
+        if tag is None:
+            if len(self.meta.queue) == 0:
+                raise RuntimeError
+            tag = self.meta.queue[-1]
+
+        if tag not in self.meta.queue:
+            raise ValueError
+
+        path = os.path.join(self.rootdir, tag, 'model.params')
+        return paddle.load(path)
+
+    def push(self,
+             state_dict: dict,
+             tag: Optional[str] = None,
+             enqueue: bool = True) -> str:
+        """
+        """
+        tag = str(self._meta.counter) if tag is None else tag
+        dirname = os.path.join(self.rootdir, tag)
         path = os.path.join(dirname, 'model.params')
 
-        if os.path.exists(path) and not self._meta.overwrite:
-            raise RuntimeError
-
-        if len(self._meta.queue) >= self._meta.keep_checkpoint_max:
-            if self._meta.keep_checkpoint_max > 0:
+        if enqueue:
+            if self._meta.keep_checkpoint_max > 0 and len(
+                    self._meta.queue) >= self._meta.keep_checkpoint_max:
                 self.pop()
+
+            self._meta.queue.append(tag)
+            self._meta.counter += 1
+        else:
+            if os.path.exists(path) and not self._meta.overwrite:
+                raise RuntimeError
 
         os.makedirs(dirname, exist_ok=True)
         paddle.save(state_dict, path)
-
-        self._meta.queue.append(self._meta.counter)
-        self._meta.counter += 1
         self._sync_to_file()
 
-    def pop(self) -> dict:
+        return tag
+
+    def pop(self) -> str:
         """
         """
         if len(self._meta.queue) == 0:
             raise RuntimeError
 
         pop_idx = self._meta.queue[0]
-        pop_dir = os.path.join(self.save_dir, str(pop_idx))
+        pop_dir = os.path.join(self.rootdir, pop_idx)
         shutil.rmtree(pop_dir)
         self._meta.queue = self._meta.queue[1:]
         self._sync_to_file()
 
+        return pop_idx
+
+    @property
+    def empty(self):
+        """
+        """
+        return len(self._meta.queue) == 0
+
     def record(self, key: Hashable, value: Generic) -> bool:
+        """
+        """
         if key in self._meta and not self._meta.overwrite:
             return False
 
@@ -125,8 +173,18 @@ class Checkpoint(CheckpointABC):
 
     @property
     def meta(self) -> dict:
+        """
+        """
         return copy.deepcopy(self._meta)
 
     @property
     def metafile(self) -> str:
-        return os.path.join(self.save_dir, 'meta.yaml')
+        """
+        """
+        return os.path.join(self.rootdir, 'meta.yaml')
+
+    @property
+    def rootdir(self) -> str:
+        """
+        """
+        return self.save_dir

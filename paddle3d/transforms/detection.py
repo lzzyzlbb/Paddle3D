@@ -18,9 +18,10 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from paddle3d.apis import manager
+from paddle3d.sample import Sample
 from paddle3d.transforms import functional as F
 from paddle3d.transforms.base import TransformABC
-from paddle3d.apis import manager
 
 
 @manager.TRANSFORMS.add_component
@@ -43,14 +44,14 @@ class Normalize(TransformABC):
         if reduce(lambda x, y: x * y, self.std) == 0:
             raise ValueError('{}: std is invalid!'.format(self))
 
-    def __call__(self, data: dict, label: Optional[dict] = None):
+    def __call__(self, sample: Sample):
         """
         """
         mean = np.array(self.mean)[:, np.newaxis, np.newaxis]
         std = np.array(self.std)[:, np.newaxis, np.newaxis]
-        data.image = F.normalize(data.image, mean, std)
+        sample.data = F.normalize(sample.data, mean, std)
 
-        return data, label
+        return sample
 
 
 @manager.TRANSFORMS.add_component
@@ -61,18 +62,19 @@ class RandomHorizontalFlip(TransformABC):
     def __init__(self, prob: float = 0.5):
         self.prob = prob
 
-    def __call__(self, data: dict, label: Optional[dict] = None):
+    def __call__(self, sample: Sample):
         if np.random.random() < self.prob:
 
-            data.image = F.horizontal_flip(data.image)
-            h, w, c = data.image.shape
+            sample.data = F.horizontal_flip(sample.data)
+            h, w, c = sample.data.shape
 
             # flip camera intrinsics
-            if 'K' in label:
-                label['K'][0, 2] = w - label['K'][0, 2] - 1
+            if sample.meta.camera_intrinsic:
+                sample.meta.camera_intrinsic[
+                    0, 2] = w - sample.meta.camera_intrinsic - 1
 
             # flip bbox
-            for obj in label.get('objects', []):
-                obj.horizontal_flip(image_width=w)
+            sample.bboxes_3d.horizontal_flip()
+            sample.bboxes_2d.horizontal_flip(image_width=w)
 
-        return data, label
+        return sample

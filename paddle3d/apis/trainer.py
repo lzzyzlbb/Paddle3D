@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from enum import Enum
 from typing import Callable, Union
 
 import paddle
+from visualdl import LogWriter
 
 import paddle3d.env as env
+from paddle3d.batch import collate_fn
 from paddle3d.apis.checkpoint import Checkpoint, CheckpointABC
 from paddle3d.apis.scheduler import Scheduler, SchedulerABC
 from paddle3d.apis.pipeline import trainning_step, validation_step
@@ -30,11 +33,12 @@ def default_dataloader_build_fn(**kwargs) -> paddle.io.DataLoader:
     """
 
     def _generate_loader(dataset: paddle.io.Dataset):
-        batch_size = kwargs.pop('batch_size', 1)
-        shuffle = kwargs.pop('shuffle', False if dataset.is_test_mode else True)
-        drop_last = kwargs.pop('drop_last',
-                               False if dataset.is_test_mode else True)
-
+        batch_size = kwargs.get('batch_size', 1)
+        shuffle = kwargs.get('shuffle',
+                             False if not dataset.is_train_mode else True)
+        drop_last = kwargs.get('drop_last',
+                               False if not dataset.is_train_mode else True)
+        collate_fn =  dataset.collate_fn if callable(getattr(dataset ,"collate_fn")) else collate_fn
         batch_sampler = paddle.io.DistributedBatchSampler(
             dataset,
             batch_size=batch_size,
@@ -42,7 +46,7 @@ def default_dataloader_build_fn(**kwargs) -> paddle.io.DataLoader:
             drop_last=drop_last)
 
         return paddle.io.DataLoader(
-            dataset=dataset, batch_sampler=batch_sampler, **kwargs)
+            dataset=dataset, batch_sampler=batch_sampler, collate_fn=collate_fn)
 
     return _generate_loader
 
@@ -50,7 +54,8 @@ def default_dataloader_build_fn(**kwargs) -> paddle.io.DataLoader:
 def default_checkpoint_build_fn(**kwargs) -> Checkpoint:
     """
     """
-    kwargs.setdefault('save_dir', 1000)
+    kwargs = kwargs.copy()
+    kwargs.setdefault('save_dir', 'output')
     kwargs.setdefault('keep_checkpoint_max', 5)
     kwargs.setdefault('overwrite', True)
     return Checkpoint(**kwargs)
@@ -59,6 +64,7 @@ def default_checkpoint_build_fn(**kwargs) -> Checkpoint:
 def default_scheduler_build_fn(**kwargs) -> Scheduler:
     """
     """
+    kwargs = kwargs.copy()
     kwargs.setdefault('save_interval', 1000)
     kwargs.setdefault('log_interval', 10)
     kwargs.setdefault('do_eval', False)
@@ -69,18 +75,23 @@ class Trainer:
     """
     """
 
-    def __init__(self,
-                 model: paddle.nn.Layer,
-                 iters: int,
-                 optimizer: paddle.optimizer.Optimizer,
-                 train_dataset: paddle.io.Dataset,
-                 val_dataset: paddle.io.Dataset = None,
-                 checkpoint: Union[dict, CheckpointABC] = None,
-                 scheduler: Union[dict, SchedulerABC] = None,
-                 dataloader_fn: Union[dict, Callable] = None):
+    def __init__(
+            self,
+            model: paddle.nn.Layer,
+            iters: int,
+            optimizer: paddle.optimizer.Optimizer,
+            train_dataset: paddle.io.Dataset,
+            val_dataset: paddle.io.Dataset = None,
+            # TODO: Default parameters should not use mutable objects, there is a risk
+            checkpoint: Union[dict, CheckpointABC] = dict(),
+            scheduler: Union[dict, SchedulerABC] = dict(),
+            dataloader_fn: Union[dict, Callable] = dict()):
 
         self.model = model
         self.optimizer = optimizer
+        self.iters = iters
+        self.cur_iter = 0
+        vdl_file_name = None
 
         if env.nranks > 1:
             env.init_distributed()
@@ -100,9 +111,23 @@ class Trainer:
         self.train_dataloader = _dataloader_build_fn(train_dataset)
         self.eval_dataloader = _dataloader_build_fn(
             val_dataset) if val_dataset else None
+        self.val_dataset = val_dataset
 
-        self.cur_iter = self.checkpoint.meta.get('iters', 0)
-        self.iters = iters
+        if not self.checkpoint.empty:
+            state_dict = self.checkpoint.get()
+            self.model.set_dict(state_dict['params'])
+            self.optimizer.set_state_dict(state_dict['opts'])
+            self.cur_iter = self.checkpoint.meta.get('iters')
+
+            logger.info(
+                'Resume model from checkpoint {}, current iter set to {}'.
+                format(self.checkpoint.rootdir, self.cur_iter))
+            vdl_file_name = self.checkpoint.meta['vdl_file_name']
+
+        self.log_writer = LogWriter(
+            logdir=self.checkpoint.rootdir, file_name=vdl_file_name)
+        self.checkpoint.record('vdl_file_name',
+                               os.path.basename(self.log_writer.file_name))
 
     def train(self):
         """
@@ -112,12 +137,12 @@ class Trainer:
 
         while self.cur_iter < self.iters:
 
-            for data, label in self.train_dataloader:
+            for sample in self.train_dataloader:
                 self.cur_iter += 1
                 if self.cur_iter > self.iters:
                     break
 
-                loss = trainning_step(self.model, self.optimizer, data, label)
+                loss = trainning_step(self.model, self.optimizer, sample)
                 loss_sum += loss
 
                 timer.step()
@@ -125,15 +150,23 @@ class Trainer:
 
                 if status.do_log and env.local_rank == 0:
                     lr = self.optimizer.get_lr()
+                    loss_sum = float(loss_sum / self.scheduler.log_interval)
                     logger.info(
                         '[TRAIN] iter={}/{}, loss={:.4f}, lr={:.6f} | ETA {}'.
-                        format(self.cur_iter, self.iters,
-                               float(loss_sum / self.scheduler.log_interval),
-                               lr, timer.eta))
+                        format(self.cur_iter, self.iters, loss_sum, lr,
+                               timer.eta))
+
+                    self.log_writer.add_scalar(
+                        tag='Training/learning_rate',
+                        value=lr,
+                        step=self.cur_iter)
+                    self.log_writer.add_scalar(
+                        tag='Training/loss', value=loss_sum, step=self.cur_iter)
 
                     loss_sum = 0
 
                 if status.do_eval and env.local_rank == 0:
+                    # TODO: whether to save a checkpoint based on the metric
                     metrics = self.evaluate()
 
                 if status.save_checkpoint and env.local_rank == 0:
@@ -142,14 +175,27 @@ class Trainer:
                         'opts': self.optimizer.state_dict()
                     }
 
+                    logger.info('Push model to checkpoint {}'.format(
+                        self.checkpoint.rootdir))
                     self.checkpoint.push(dic)
                     self.checkpoint.record('iters', self.cur_iter)
 
-    def evaluate(self):
+    def evaluate(self) -> float:
         """
         """
-        with logger.processing('eval on validate dataset'):
-            for data, label in self.eval_dataloader:
-                metric = validation_step(self.model, data, label)
+        results = []
+        metrics = None
 
-        return metric
+        if self.val_dataset is None:
+            raise RuntimeError
+        with logger.processing('evaluate on validate dataset'):
+            for sample in self.eval_dataloader:
+                # list in list out
+                pred_dicts = validation_step(self.model, sample)
+                results += self.val_dataset.generate_prediction_dicts(
+                        sample, pred_dicts,
+                        output_path= None
+                    )
+            metrics = self.val_dataset.evaluation(results)
+            logger.info(metrics)
+        return metrics

@@ -12,31 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import paddle
+from json import JSONEncoder
+
+import numpy as np
 
 
-def trainning_step(model: paddle.nn.Layer,
-                   optimizer: paddle.optimizer.Optimizer, data: dict,
-                   label: dict):
-    model.train()
-    outputs = model(data, label)
-
-    loss = outputs['loss']
-    # model backward
-    loss.backward()
-
-    optimizer.step()
-    model.clear_gradients()
-
-    return loss
+class StructureEncoder(JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, _Structure):
+            return obj.tolist()
+        return super().default(obj)
 
 
-def validation_step(model: paddle.nn.Layer, data: dict, label=None):
-    model.eval()
+class _Structure(np.ndarray):
+    """
+    """
 
-    with paddle.no_grad():
-        outputs = model(data)
-    return outputs
+    def __new__(cls, data: np.ndarray):
+        if not isinstance(data, np.ndarray):
+            data = np.array(data)
 
-def predict(model: paddle.nn.Layer, data):
-    outputs = model(data)
+        data = data.astype(np.float32)
+
+        obj = np.asarray(data).view(cls)
+        return obj

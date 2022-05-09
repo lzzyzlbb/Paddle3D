@@ -41,8 +41,8 @@ class SmoothL1Loss(nn.Layer):
         if beta < 1e-5:
             loss = paddle.abs(diff)
         else:
-            n = paddle.abs(diff)
-            loss = paddle.where(n < beta, 0.5 * n ** 2 / beta, n - 0.5 * beta)
+            n_diff = paddle.abs(diff)
+            loss = paddle.where(n_diff < beta, 0.5 * n_diff ** 2 / beta, n_diff - 0.5 * beta)
 
         return loss
 
@@ -72,6 +72,5 @@ class SmoothL1Loss(nn.Layer):
         if weights is not None:
             assert weights.shape[0] == loss.shape[0] and weights.shape[1] == loss.shape[1]
             loss = loss * weights.unsqueeze(-1)
-
         return loss
 

@@ -49,6 +49,10 @@ std::vector<std::vector<int64_t>> GridSample3DInferShape(std::vector<int64_t> x_
     return {{x_shape[0], x_shape[1], grid_shape[1], grid_shape[2], grid_shape[3]}};
 }
 
+std::vector<std::vector<int64_t>> GridSample3DInferBackShape(std::vector<int64_t> x_shape, std::vector<int64_t> grid_shape) {
+    return {x_shape};
+}
+
 std::vector<paddle::DataType> GridSample3DInferDtype(paddle::DataType x_dtype, paddle::DataType grid_dtype) {
     return {x_dtype};
 }
@@ -65,5 +69,6 @@ PD_BUILD_OP(grid_sample_3d)
 PD_BUILD_GRAD_OP(grid_sample_3d)
     .Inputs({"x", "grid", paddle::Grad("out")})
     .Attrs({"mode: std::string", "padding_mode: std::string", "align_corners: bool"})
-    .Outputs({paddle::Grad("x"), paddle::Grad("grid")})
-    .SetKernelFn(PD_KERNEL(GridSample3DBackward)); 
+    .Outputs({paddle::Grad("x")})
+    .SetKernelFn(PD_KERNEL(GridSample3DBackward))
+    .SetInferShapeFn(PD_INFER_SHAPE(GridSample3DInferBackShape));

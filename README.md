@@ -64,8 +64,10 @@ cd ../../../
 数据在 data/kitti/training下有一部分，还需要将部分处理好的数据, [kitti_infos_val](https://paddle3d.bj.bcebos.com/caddn/data/kitti_infos_val.pkl), 下载后放到data/kitti/下面
 
 
-
-
+### 评估
+```
+python evaluate.py --config configs/caddn/caddn.yml --model model_path
+```
 
 ### 导出静态图模型
 

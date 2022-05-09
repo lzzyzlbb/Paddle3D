@@ -12,31 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import paddle
-
-
-def trainning_step(model: paddle.nn.Layer,
-                   optimizer: paddle.optimizer.Optimizer, data: dict,
-                   label: dict):
-    model.train()
-    outputs = model(data, label)
-
-    loss = outputs['loss']
-    # model backward
-    loss.backward()
-
-    optimizer.step()
-    model.clear_gradients()
-
-    return loss
-
-
-def validation_step(model: paddle.nn.Layer, data: dict, label=None):
-    model.eval()
-
-    with paddle.no_grad():
-        outputs = model(data)
-    return outputs
-
-def predict(model: paddle.nn.Layer, data):
-    outputs = model(data)
+from .bbox import BBoxes2D, BBoxes3D
+from .pointcloud import PointCloud
+from .structure import StructureEncoder

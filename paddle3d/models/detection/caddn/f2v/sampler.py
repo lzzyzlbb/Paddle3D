@@ -41,5 +41,6 @@ class Sampler(nn.Layer):
             output_features [Tensor(N, C, H_out, W_out)]: Output feature maps
         """
         # Sample from grid
+        grid.stop_gradient=False
         output = grid_sample_3d.grid_sample_3d(x=input_features, grid=grid, mode='bilinear', padding_mode='zeros', align_corners=False)
         return output
