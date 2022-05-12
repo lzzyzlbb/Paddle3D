@@ -81,6 +81,7 @@ python export.py --config configs/caddn/caddn.yml --model_path model_path
 
 ### 推理
 
+- 已导出的静态模型在 [paddle_caddn](https://paddle3d.bj.bcebos.com/caddn/model/inference_model.zip)
 ```
 python infer.py --cfg configs/caddn/caddn.yml --model_file output/model --output_dir ./infer
 ```
