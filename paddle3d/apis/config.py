@@ -155,7 +155,11 @@ class Config(object):
         if optimizer_type in paddle.optimizer.__all__:
             return getattr(paddle.optimizer, optimizer_type)(
                 lr, parameters=self.model.parameters(), **args)
-
+        else:
+            params = self.dic.get('optimizer')
+            params["parameters"] = self.model.parameters()
+            params["learning_rate"] = lr
+            return self._load_object(params)
         raise RuntimeError(
             'Unknown optimizer type {}. Paddle only supports the following optimizers {}'
             .format(optimizer_type, paddle.optimizer.__all__))
@@ -205,7 +209,7 @@ class Config(object):
     def _load_component(self, com_name: str) -> Any:
         com_list = [
             manager.BACKBONES, manager.MODELS, manager.NECKS, manager.LOSSES,
-            manager.DATASETS, manager.TRANSFORMS, manager.HEADS
+            manager.DATASETS, manager.TRANSFORMS, manager.HEADS, manager.OPTIMIZERS
         ]
 
         for com in com_list:
@@ -223,9 +227,9 @@ class Config(object):
     def _load_object(self, obj: Generic, recursive: bool = True) -> Any:
         if isinstance(obj, Mapping):
             dic = obj.copy()
+            
             component = self._load_component(
                 dic.pop('type')) if 'type' in dic else dict
-
             if recursive:
                 params = {}
                 for key, val in dic.items():

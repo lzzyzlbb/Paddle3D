@@ -48,5 +48,5 @@ class Scheduler(SchedulerABC):
         save_checkpoint = self.save_interval != 0 and self.cur_iter % self.save_interval == 0
         do_eval = save_checkpoint and self.do_eval
         do_log = self.log_interval != 0 and self.cur_iter % self.log_interval == 0
-
+        
         return SchedulerStatus(do_eval, do_log, save_checkpoint)

@@ -42,7 +42,7 @@ def default_dataloader_build_fn(**kwargs) -> paddle.io.DataLoader:
         batch_sampler = paddle.io.DistributedBatchSampler(
             dataset,
             batch_size=batch_size,
-            shuffle=shuffle,
+            shuffle=False,
             drop_last=drop_last)
 
         return paddle.io.DataLoader(
@@ -144,10 +144,9 @@ class Trainer:
 
                 loss = trainning_step(self.model, self.optimizer, sample)
                 loss_sum += loss
-
+                
                 timer.step()
                 status = self.scheduler.step()
-
                 if status.do_log and env.local_rank == 0:
                     lr = self.optimizer.get_lr()
                     loss_sum = float(loss_sum / self.scheduler.log_interval)

@@ -17,6 +17,7 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 
 from paddle3d.apis import manager
+from paddle3d.utils import checkpoint
 from paddle3d.utils.logger import logger
 from paddle3d.models.layers import ConvBNReLU
 from .bev import BEV
@@ -30,7 +31,7 @@ class CADDN(nn.Layer):
     """
 
     def __init__(self, backbone_3d, bev_cfg, dense_head, 
-                 class_head, ffe_cfg, f2v_cfg, disc_cfg, map_to_bev_cfg, post_process_cfg):
+                 class_head, ffe_cfg, f2v_cfg, disc_cfg, map_to_bev_cfg, post_process_cfg, pretrained=None):
         super().__init__()
         self.backbone_3d = backbone_3d
         self.class_head = class_head
@@ -40,6 +41,8 @@ class CADDN(nn.Layer):
         self.dense_head = dense_head
         self.f2v = FrustumToVoxel(**f2v_cfg, disc_cfg=disc_cfg)
         self.post_process_cfg = post_process_cfg
+        self.pretrained = pretrained
+        self.init_weight()
         
     def forward(self, data):
         images = data["images"]
@@ -68,25 +71,12 @@ class CADDN(nn.Layer):
         # backbone_2d
         data = self.backbone_2d(data)
         predictions = self.dense_head(data)
-        """
-        import pickle
-        res = {}
-            
-        with open('/workspace/paddle/CaDDN/res.p', 'wb') as f:
-            for k in predictions:
-                try:
-                    res[k] = predictions[k].cpu().numpy()
-                except:
-                    print(k)
-            pickle.dump(res, f, protocol=pickle.HIGHEST_PROTOCOL)
         
-        # exit()
-        """
         if not self.training:
             return self.post_process(predictions)
         else:
             loss = self.get_loss(predictions)
-            return {'loss': loss}
+            return loss
         
     def get_loss(self, predictions):
         disp_dict = {}
@@ -102,7 +92,9 @@ class CADDN(nn.Layer):
         }
 
         loss = loss_rpn + loss_depth
-        return loss, tb_dict, disp_dict
+
+        losses = {"loss": loss, "tb_dict":tb_dict, "disp_dict":disp_dict}
+        return losses
     
     def post_process(self, batch_dict):
         """
@@ -199,6 +191,9 @@ class CADDN(nn.Layer):
                 selected_box = paddle.gather(box_preds, index = selected)
                 selected_label = paddle.gather(label_preds, index = selected)
                 return selected_score, selected_label, selected_box
+
+    def init_weight(self):
+        checkpoint.load_pretrained_model(self, self.pretrained)
 
 
     

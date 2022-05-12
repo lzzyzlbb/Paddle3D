@@ -33,7 +33,6 @@ def boxes3d_lidar_to_aligned_bev_boxes(boxes3d):
         aligned_bev_boxes: (N, 4) [x1, y1, x2, y2] in the above lidar coordinate
     """
     rot_angle = paddle.abs(boxes3d[:, 6] - paddle.floor(boxes3d[:, 6] / np.pi + 0.5) * np.pi)
-    print(rot_angle.shape)
     choose_dims = paddle.where(rot_angle[:, None] < np.pi / 4, paddle.gather(boxes3d, index=paddle.to_tensor([3, 4]), axis=1),
                              paddle.gather(boxes3d, index=paddle.to_tensor([4, 3]), axis=1))
     aligned_bev_boxes = paddle.concat([boxes3d[:, 0:2] - choose_dims / 2, boxes3d[:, 0:2] + choose_dims / 2], axis=1)

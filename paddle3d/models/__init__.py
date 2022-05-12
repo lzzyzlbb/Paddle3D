@@ -25,3 +25,5 @@ from .detection.caddn.caddn import CADDN
 from .heads.dense_heads.anchor_head import AnchorHeadSingle
 from .heads.class_heads.deeplabv3_head import DeepLabV3Head
 
+from .optimizers import AdamWOnecycle
+

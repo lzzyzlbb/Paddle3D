@@ -16,18 +16,18 @@ import paddle
 
 
 def trainning_step(model: paddle.nn.Layer,
-                   optimizer: paddle.optimizer.Optimizer, data: dict,
-                   label: dict):
+                   optimizer: paddle.optimizer.Optimizer, data: dict):
+                   # label: dict):
     model.train()
-    outputs = model(data, label)
-
+    outputs = model(data) #, label)
     loss = outputs['loss']
     # model backward
     loss.backward()
 
-    optimizer.step()
+    optimizer.step() 
+    optimizer._learning_rate.step()
     model.clear_gradients()
-
+    
     return loss
 
 

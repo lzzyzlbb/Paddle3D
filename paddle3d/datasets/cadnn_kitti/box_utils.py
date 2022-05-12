@@ -40,16 +40,16 @@ def boxes_to_corners_3d(boxes3d):
     """
     boxes3d = paddle.to_tensor(boxes3d)
 
-    template = boxes3d.new_tensor((
+    template = paddle.to_tensor([
         [1, 1, -1], [1, -1, -1], [-1, -1, -1], [-1, 1, -1],
         [1, 1, 1], [1, -1, 1], [-1, -1, 1], [-1, 1, 1],
-    )) / 2
+    ]) / 2
 
-    corners3d = boxes3d[:, None, 3:6].repeat(1, 8, 1) * template[None, :, :]
-    corners3d = common_utils.rotate_points_along_z(corners3d.view(-1, 8, 3), boxes3d[:, 6]).view(-1, 8, 3)
-    corners3d += boxes3d[:, None, 0:3]
+    corners3d = boxes3d[:, None, 3:6].tile([1, 8, 1]) * template[None, :, :]
+    corners3d = common_utils.rotate_points_along_z(corners3d.reshape([-1, 8, 3]), boxes3d[:, 6]).reshape([-1, 8, 3])
+    corners3d = corners3d + boxes3d[:, None, 0:3].numpy()
 
-    return corners3d.numpy()
+    return corners3d
 
 
 def mask_boxes_outside_range_numpy(boxes, limit_range, min_num_corners=1):

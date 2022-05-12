@@ -362,8 +362,7 @@ class ResNet(nn.Layer):
                 self.stage_list.append(block_list)
 
         self.pretrained = pretrained
-        # self.init_weight()
-
+        
     def forward(self, inputs):
         y = self.conv1(inputs)
         y = self.pool2d_max(y)
@@ -377,9 +376,6 @@ class ResNet(nn.Layer):
                 feat_list.append(y)
 
         return feat_list
-
-    def init_weight(self):
-        checkpoint.load_pretrained_model(self, self.pretrained)
 
     
 

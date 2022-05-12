@@ -121,7 +121,7 @@ class KittiCadnnDataset(paddle.io.Dataset):
         std = np.array([0.229, 0.224, 0.225])
         image -= mean
         image /= std
-        image = image.transpose([2,0,1])
+        # image = image.transpose([2,0,1])
         return image
 
     def get_image_shape(self, idx):
@@ -346,8 +346,6 @@ class KittiCadnnDataset(paddle.io.Dataset):
             "R0": calib.R0,
             "Tr_velo2cam": calib.V2C
         })
-        del data_dict["calib"]
-        del data_dict["frame_id"]
         return data_dict
 
     # @staticmethod
@@ -451,7 +449,7 @@ class KittiCadnnDataset(paddle.io.Dataset):
 
         if data_dict.get('gt_boxes', None) is not None and self.remove_outside_boxes and self.training:
             mask = mask_boxes_outside_range_numpy(
-                data_dict['gt_boxes'], self.point_cloud_range, min_num_corners=config.get('min_num_corners', 1)
+                data_dict['gt_boxes'], self.point_cloud_range, min_num_corners=1
             )
             data_dict['gt_boxes'] = data_dict['gt_boxes'][mask]
         return data_dict
@@ -459,7 +457,22 @@ class KittiCadnnDataset(paddle.io.Dataset):
     def calculate_grid_size(self):
         grid_size = (self.point_cloud_range[3:6] - self.point_cloud_range[0:3]) / np.array(self.voxel_size)
         self.grid_size = np.round(grid_size).astype(np.int64)
-        
+    
+    def data_augmentor(self, data_dict):
+        from .image_augmentor_utils import random_image_flip
+        data_dict = random_image_flip(data_dict)
+        data_dict['gt_boxes'][:, 6] = data_dict['gt_boxes'][:, 6] - np.floor(data_dict['gt_boxes'][:, 6] / (2 * np.pi) + 0.5) * (2 * np.pi)
+        if 'calib' in data_dict:
+            data_dict.pop('calib')
+        if 'road_plane' in data_dict:
+            data_dict.pop('road_plane')
+        if 'gt_boxes_mask' in data_dict:
+            gt_boxes_mask = data_dict['gt_boxes_mask']
+            data_dict['gt_boxes'] = data_dict['gt_boxes'][gt_boxes_mask]
+            data_dict['gt_names'] = data_dict['gt_names'][gt_boxes_mask]
+            data_dict.pop('gt_boxes_mask')
+
+        return data_dict
 
     def prepare_data(self, data_dict):
         """
@@ -486,7 +499,7 @@ class KittiCadnnDataset(paddle.io.Dataset):
             assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
             gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
 
-            data_dict = self.data_augmentor.forward(
+            data_dict = self.data_augmentor(
                 data_dict={
                     **data_dict,
                     'gt_boxes_mask': gt_boxes_mask
@@ -519,7 +532,9 @@ class KittiCadnnDataset(paddle.io.Dataset):
             return self.__getitem__(new_index)
 
         data_dict.pop('gt_names', None)
-
+        data_dict.pop('calib', None)
+        data_dict.pop('frame_id', None)
+        
         return data_dict
 
     
@@ -566,6 +581,7 @@ class KittiCadnnDataset(paddle.io.Dataset):
         data_dict = self.update_data(data_dict=input_dict)
         data_dict = self.prepare_data(data_dict=data_dict)
         data_dict['image_shape'] = img_shape
+        #data_dict['images'] = data_dict['images'].transpose([2,0,1])
         return data_dict
 
     @staticmethod
@@ -607,7 +623,7 @@ class KittiCadnnDataset(paddle.io.Dataset):
                         pad_w = get_pad_params(desired_size=max_w, cur_size=image.shape[1])
                         pad_width = (pad_h, pad_w)
                         # Pad with nan, to be replaced later in the pipeline.
-                        pad_value = np.nan
+                        pad_value = 0
 
                         if key == "images":
                             pad_width = (pad_h, pad_w, (0, 0))
@@ -621,6 +637,8 @@ class KittiCadnnDataset(paddle.io.Dataset):
 
                         images.append(image_pad)
                     ret[key] = np.stack(images, axis=0)
+                    if key == "images":
+                        ret[key] = ret[key].transpose([0,3,1,2])
                 elif key in "calib_info":
                     continue
                 else:

@@ -23,7 +23,6 @@ def load_pretrained_model(model: paddle.nn.Layer, pretrained_model_path: str):
 
     if os.path.exists(pretrained_model_path):
         para_state_dict = paddle.load(pretrained_model_path)
-
         model_state_dict = model.state_dict()
         keys = model_state_dict.keys()
         num_params_loaded = 0
