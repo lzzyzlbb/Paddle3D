@@ -19,9 +19,23 @@ limitations under the License. */
 
 #include "paddle/include/paddle_inference_api.h"
 
+DEFINE_bool(use_trt, true, "use trt.");
+DEFINE_string(trt_precision, "trt_fp32", "trt_fp32, trt_fp16, etc.");
+DEFINE_bool(tune, false, "tune to get shape range.");
+
 using paddle_infer::Config;
 using paddle_infer::Predictor;
 using paddle_infer::CreatePredictor;
+
+const std::string shape_range_info = "shape_range_info.pbtxt";
+
+paddle_infer::PrecisionType GetPrecisionType(const std::string& ptype) {
+  if (ptype == "trt_fp32")
+    return paddle_infer::PrecisionType::kFloat32;
+  if (ptype == "trt_fp16")
+    return paddle_infer::PrecisionType::kHalf;
+  return paddle_infer::PrecisionType::kFloat32;
+}
 
 void run(Predictor *predictor, 
          const std::vector<int> &images_shape,
@@ -82,6 +96,16 @@ int main() {
   config.EnableUseGpu(100, 0);
   config.SetModel("caddn_infer_model/model.pdmodel",
                   "caddn_infer_model/model.pdiparams");
+  // use trt
+  if (FLAGS_use_trt) {
+    config.EnableTensorRtEngine(1 << 30, 8, 3,
+                              GetPrecisionType(FLAGS_trt_precision), false, false);
+    config.EnableTunedTensorRtDynamicShape(shape_range_info, true);
+    if (FLAGS_tune) {
+      config.CollectShapeRangeInfo(shape_range_info);
+    }
+  }
+
   auto predictor{paddle_infer::CreatePredictor(config)};
   std::vector<int> images_shape = {1, 3, 375, 1242};
   std::vector<float> images_data(1 * 3 * 375 * 1242, 1);
