@@ -1,11 +1,13 @@
 ## 一. 将模型参数放到caddn_infer_model目录下
 模型放好后的目录结构
+```
 deploy
    ├── caddn_infer_model
    |            ├── model.pdiparams
    |            └── model.pdmodel
    ├── caddn_main.cc
    ...
+```
 
 ## 二. 修改`compile.sh`
 
