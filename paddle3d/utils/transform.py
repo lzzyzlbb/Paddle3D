@@ -99,16 +99,34 @@ def project_to_image(project, points):
     shape_inp_len = len(shape_inp)
     points = points.reshape([-1, shape_inp[shape_inp_len-2], shape_inp[shape_inp_len-1]])
     shape_inp[shape_inp_len-1] += 1
+
     points = convert_points_to_homogeneous(points)
-    points = points.reshape(shape_inp)
-    points = points.unsqueeze(axis=-1)
-    project = project.unsqueeze(axis=1)
+    # print('before shape:', points.shape, shape_inp, project.shape)
+    # points = points.reshape(shape_inp)
+    # points = points.unsqueeze(axis=-1)
+    # project = project.unsqueeze(axis=1)
+    points = points.reshape([shape_inp[0], -1, shape_inp[-1]]).transpose([0, 2, 1])
+    # points = points.reshape([-1, shape_inp[-1], 1])
+    project_shape = project.shape
+    project = project.reshape([project_shape[0], project_shape[-2], project_shape[-1]])
+    # project = project.reshape([-1, project_shape[-2], project_shape[-1]])
 
     # Transform points to image and get depths
+    # print('shape:', project.shape, points.shape)
+    points_shape = points.shape
     points_t = project @ points
-    points_t = points_t.squeeze(axis=-1)
+    points_t = points_t.transpose([0, 2, 1])
+
+    # points_t = points_t.squeeze(axis=-1)
+    points_t_shape = points_t.shape
+    points_t = points_t.reshape([points_t_shape[0], shape_inp[1], shape_inp[2], shape_inp[3], points_t_shape[-1]])
+
     points_img = convert_points_from_homogeneous_2d(points_t)
+
+    project = project.reshape(project_shape).unsqueeze(axis=1)
     points_depth = points_t[..., -1] - project[..., 2, 3]
+
+    return points_img, points_depth
 
     return points_img, points_depth
 

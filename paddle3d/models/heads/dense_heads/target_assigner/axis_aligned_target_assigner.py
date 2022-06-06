@@ -165,7 +165,10 @@ class AxisAlignedTargetAssigner(object):
             if len(gt_boxes) == 0 or anchors.shape[0] == 0:
                 labels[:] = 0
             else:
-                labels[bg_inds] = 0
+                bg_inds  = bg_inds.cast('int32')
+                updates = paddle.zeros(bg_inds.shape, dtype='int32')
+                labels = paddle.scatter(labels.astype('int32'), index=bg_inds, updates=updates)
+                # labels[bg_inds] = 0
                 # labels[anchors_with_max_overlap] = gt_classes[gt_inds_force]
         bbox_targets = paddle.zeros(shape=[num_anchors, self.box_coder.code_size], dtype=anchors.dtype)
         if gt_boxes.shape[0] > 0 and anchors.shape[0] > 0 and len(fg_inds) > 0:
